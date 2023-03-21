@@ -1,0 +1,6 @@
+add_tool_exec(gconverter)
+add_tool_exec(mpgp)
+add_tool_exec(gcn)
+add_tool_exec(relabel)
+add_tool_exec(gtrain)
+add_tool_exec(prl_mpgp)

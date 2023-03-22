@@ -29,7 +29,9 @@
 #include <vector>
 #include <map>
 
+#include "mykernel.cuh"
 
+int cuda_test(int argc, char ** argv);
 
 using std::vector;
 using std::map;
@@ -1782,19 +1784,19 @@ int ArgPos(char *str, int argc, char **argv)
   return -1;
 }
 
-int main(int argc, char **argv)
+int cuda_test(int argc, char **argv)
 {
   char hostname[MPI_MAX_PROCESSOR_NAME];
   int hostname_len;
 
   // retrieve MPI task info
   int mpi_thread_provided;
-  MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &mpi_thread_provided);
-  if (mpi_thread_provided != MPI_THREAD_MULTIPLE)
-  {
-    printf("MPI multiple thread is NOT provided!!! (%d != %d)\n", mpi_thread_provided, MPI_THREAD_MULTIPLE);
-    return 1;
-  }
+  // MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &mpi_thread_provided);
+  // if (mpi_thread_provided != MPI_THREAD_MULTIPLE)
+  // {
+  //   printf("MPI multiple thread is NOT provided!!! (%d != %d)\n", mpi_thread_provided, MPI_THREAD_MULTIPLE);
+  //   return 1;
+  // }
   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
   MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
   MPI_Get_processor_name(hostname, &hostname_len);
@@ -1869,8 +1871,7 @@ int main(int argc, char **argv)
     alpha = 0.05;
   if ((i = ArgPos((char *)"-alpha", argc, argv)) > 0)
     alpha = atof(argv[i + 1]);
-  if ((i = ArgPos((char *)"-output", argc, argv)) > 0)
-    strcpy(output_file, argv[i + 1]);
+  if ((i = ArgPos((char *)"-output", argc, argv)) > 0) 
   if ((i = ArgPos((char *)"-window", argc, argv)) > 0)
     window = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-sample", argc, argv)) > 0)
@@ -1887,6 +1888,11 @@ int main(int argc, char **argv)
     classes = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-reuse-neg", argc, argv)) > 0)
     reuseNeg = atoi(argv[i + 1]);
+  
+// 指定参数
+
+  strcpy(train_file,"/home/lzl/lzlmnt/GDistGER/corpus/wiki_corpus.txt");
+  strcpy(output_file,"vectors.bin");
 
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int)); // 初始化为0

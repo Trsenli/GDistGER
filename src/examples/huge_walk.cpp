@@ -2,9 +2,11 @@
 #include "option_helper.hpp"
 #include <string>
 #include <vector>
-#include "dsgl.hpp"
+// #include "dsgl.hpp"
+#include "mykernel.cuh"
 using namespace std;
 
+// extern "C" int cuda_test(int argc, char **argv);
 struct Empty
 {
 };
@@ -112,7 +114,8 @@ int main(int argc, char **argv)
 
    
     timer.restart();
-    dsgl(argc, argv,&graph.vertex_cn,&graph.new_sort,&graph);
+    // dsgl(argc, argv,&graph.vertex_cn,&graph.new_sort,&graph);
+    cuda_test(argc,argv);
     printf("> [%d EMBBEDDING TIME:] %lf \n", get_mpi_rank(),timer.duration());
     return 0;
 }

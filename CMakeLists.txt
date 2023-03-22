@@ -10,6 +10,14 @@ option(WITH_TESTS "Build unit test programs" OFF)
 
 include(distger.cmake)
 
+set(CMAKE_CXX_COMPILER mpic++)
+set(CMAKE_CUDA_COMPILER nvcc)
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${MPI_CXX_COMPILE_FLAGS}")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${MPI_CXX_COMPILE_FLAGS} -arch=sm_35 -ccbin mpic++ -fPIE")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MPI_CXX_LINK_FLAGS}")
+
+
 find_package(OpenMP REQUIRED)
 if(OPENMP_FOUND)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
@@ -24,6 +32,8 @@ if(MPI_FOUND)
     include_directories(${MPI_INCLUDE_PATH})
 endif()
 
+find_package(CUDA REQUIRED)
+
 # if(WITH_TESTS)
 #     enable_testing()
 #     include_directories("${CMAKE_CURRENT_SOURCE_DIR}/ext/gtest/googletest/include")
@@ -34,7 +44,7 @@ endif()
 
 #use c++11
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -std=c++0x -O3 -D USE_MKL")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -std=c++0x -O3 -D USE_MKL -fPIE")
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -std=c++0x ")
 message("${CMAKE_CXX_FLAGS}")
 

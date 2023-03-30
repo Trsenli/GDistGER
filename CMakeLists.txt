@@ -10,13 +10,6 @@ option(WITH_TESTS "Build unit test programs" OFF)
 
 include(distger.cmake)
 
-set(CMAKE_CXX_COMPILER mpic++)
-set(CMAKE_CUDA_COMPILER nvcc)
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${MPI_CXX_COMPILE_FLAGS}")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${MPI_CXX_COMPILE_FLAGS} -arch=sm_35 -ccbin mpic++ -fPIE")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MPI_CXX_LINK_FLAGS}")
-
 
 find_package(OpenMP REQUIRED)
 if(OPENMP_FOUND)
@@ -33,6 +26,10 @@ if(MPI_FOUND)
 endif()
 
 find_package(CUDA REQUIRED)
+set(CMAKE_CUDA_COMPILER nvcc)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${MPI_CXX_COMPILE_FLAGS} -arch=sm_35 -ccbin mpic++ -fPIE")
+
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MPI_CXX_LINK_FLAGS}")
 
 # if(WITH_TESTS)
 #     enable_testing()

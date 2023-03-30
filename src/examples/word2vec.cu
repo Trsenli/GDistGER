@@ -1925,6 +1925,5 @@ int cuda_test(int argc, char **argv)
   free(expTable);
   cudaFree(d_expTable);
 
-  MPI_Finalize();
   return 0;
 }

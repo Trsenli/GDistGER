@@ -1,17 +1,3 @@
-//  Copyright 2013 Google Inc. All Rights Reserved.
-//
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,8 +16,11 @@
 #include <map>
 
 #include "mykernel.cuh"
+#include "util.hpp"
+#include "type.hpp"
+// #include "mpi_helper.hpp"
+// #include "walk.hpp"
 
-int cuda_test(int argc, char ** argv);
 
 using std::vector;
 using std::map;
@@ -53,35 +42,18 @@ using std::map;
       exit(0);                                                             \
     }                                                                      \
   }
+
 typedef float real;
 typedef unsigned int uint;
 typedef unsigned long long ulonglong;
 typedef u_int32_t vertex_id_t;
 
-class Timer
-{
-  std::chrono::time_point<std::chrono::system_clock> _start = std::chrono::system_clock::now();
-
-public:
-  void restart()
-  {
-    _start = std::chrono::system_clock::now();
-  }
-  double duration()
-  {
-    std::chrono::duration<double> diff = std::chrono::system_clock::now() - _start;
-    return diff.count();
-  }
-  static double current_time()
-  {
-    std::chrono::duration<double> val = std::chrono::system_clock::now().time_since_epoch();
-    return val.count();
-  }
-};
+vector<int>* cu_vertex_cn = nullptr;
+vector<int>* cu_local_corpus = nullptr;
 
 int num_procs = 1, my_rank = -1;
 int message_size = 1024, min_sync_words = 1024, full_sync_times = 0;
-real model_sync_period = 0.1f;
+real_t model_sync_period = 0.1f;
 
 const int vocab_hash_size = 30000000; // Maximum 30 * 0.7 = 21M words in the vocabulary
 
@@ -1293,6 +1265,8 @@ void TrainModelThread()
   int active_threads = 1;
   int num_threads = 2;
 
+// TODO: 本地磁盘加载，换成 local_corpus
+
 #pragma omp parallel num_threads(num_threads)
   {
     int id = omp_get_thread_num();
@@ -1525,6 +1499,7 @@ void TrainModelThread()
         sentence_length[0] = 0;
         int cnt_sentence = 0;
 
+// TODO: 改变读句子的方式
         while (cnt_sentence < MAX_SENTENCE)
         { // Read words
           int temp_sent_len = 0;
@@ -1784,23 +1759,21 @@ int ArgPos(char *str, int argc, char **argv)
   return -1;
 }
 
-int cuda_test(int argc, char **argv)
+int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*local_corpus)
 {
+  
+  cu_vertex_cn = vertex_cn;
+  cu_local_corpus = local_corpus;
+  
   char hostname[MPI_MAX_PROCESSOR_NAME];
   int hostname_len;
-
+  
   // retrieve MPI task info
-  int mpi_thread_provided;
-  // MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &mpi_thread_provided);
-  // if (mpi_thread_provided != MPI_THREAD_MULTIPLE)
-  // {
-  //   printf("MPI multiple thread is NOT provided!!! (%d != %d)\n", mpi_thread_provided, MPI_THREAD_MULTIPLE);
-  //   return 1;
-  // }
   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
   MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
   MPI_Get_processor_name(hostname, &hostname_len);
-
+  printf("[ %d ] vertex_cn : %ld local_corpus : %ld \n",my_rank,cu_vertex_cn->size(),cu_local_corpus->size());
+  
   printf("processor name: %s, number of processors: %d, rank: %d \n", hostname, num_procs, my_rank);
 
   int i;

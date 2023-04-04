@@ -6,7 +6,8 @@
 #include "mykernel.cuh"
 using namespace std;
 
-// extern "C" int cuda_test(int argc, char **argv);
+// extern "C" int cuda_word2vec(int argc, char **argv);
+extern "C" int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*local_corpus);
 struct Empty
 {
 };
@@ -115,7 +116,7 @@ int main(int argc, char **argv)
    
     timer.restart();
     // dsgl(argc, argv,&graph.vertex_cn,&graph.new_sort,&graph);
-    cuda_test(argc,argv);
+    cuda_word2vec(argc,argv,&graph.vertex_cn,&graph.local_corpus);
     printf("> [%d EMBBEDDING TIME:] %lf \n", get_mpi_rank(),timer.duration());
     return 0;
 }

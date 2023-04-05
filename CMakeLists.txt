@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.5)
 
 project(DistGER)
 
-set(CMAKE_BUILD_TYPE "Release")
+set(CMAKE_BUILD_TYPE "Debug")
 
 set(DGER_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 option(WITH_TESTS "Build unit test programs" OFF)
@@ -41,7 +41,7 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MPI_CXX_LINK_FLAGS}")
 
 #use c++11
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -std=c++0x -O3 -D USE_MKL -fPIE")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -std=c++0x -O1 -D USE_MKL -fPIE")
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -std=c++0x ")
 message("${CMAKE_CXX_FLAGS}")
 

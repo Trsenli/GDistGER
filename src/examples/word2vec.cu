@@ -67,10 +67,11 @@ struct vocab_word
 char train_file[MAX_STRING], output_file[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
-int binary = 0, cbow = 1, debug_mode = 2, window = 5, min_count = 5, min_reduce = 1, reuseNeg = 1;
+// TODO: 支持 mincount 
+int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 0, min_reduce = 1, reuseNeg = 1;
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 128;
-long long train_words = 0, word_count_actual = 0, iter = 5, file_size = 0, classes = 0;
+long long train_words = 0, word_count_actual = 0, iter = 1, file_size = 0, classes = 0;
 float alpha = 0.025, starting_alpha, sample = 1e-3;
 float *syn0, *syn1, *syn1neg, *expTable;
 clock_t start;
@@ -1169,6 +1170,8 @@ void sgKernel(int *d_sen, int *d_sent_len, int *d_negSample, float alpha, int cn
   // int gDim= cnt_sentence; // grid size 一个grid 里有 cnt_sentence 个block
   int gDim = cnt_sentence / 2 + cnt_sentence % 2 ? 1 : 0;
 
+  // printf("[%d]bDimNeg %d gDim %d cnt_sentence: %d\n",my_rank,32*(negative+1),gDim,cnt_sentence);
+  // exit(1);
   if (reuseNeg)
   {                                    // A sentence share negative samples
     dim3 bDimNeg(32, negative + 1, 1); // block 维度
@@ -1178,6 +1181,7 @@ void sgKernel(int *d_sen, int *d_sent_len, int *d_negSample, float alpha, int cn
     {
     case 128:
       __old_sgNegReuse<128><<<gDim, bDimNeg>>> 
+      // __old_sgNegReuse<128><<<1000,100,100>>> 
           (window, layer1_size, negative, vocab_size, alpha,
            d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
       break;
@@ -1431,14 +1435,18 @@ void TrainModelThread()
     {
       // printf("id %d  process compute\n",id);
 
-      long long word, word_count = 0, last_word_count = 0;
+      long long word_count = 0, last_word_count = 0;
+      int word = 0;
       long long local_iter = iter;
 
       // use in kernel
+      // 所有句子的累加长度,不包含换行符
       int total_sent_len, reduSize = 32;
       int *sen, *sentence_length, *d_sen, *d_sent_len;
-      sen = (int *)malloc(MAX_SENTENCE * 20 * sizeof(int)); // ？？
+      // 里面装了一组句子，都在一起，扁平存储。 MAX*20应该只是单纯限制大小
+      sen = (int *)malloc(MAX_SENTENCE * 20 * sizeof(int)); 
       // checkCUDAerr(cudaHostAlloc((void **)&sen,MAX_SENTENCE * 20 * sizeof(int) ,cudaHostAllocWriteCombined | cudaHostAllocMapped));
+      // 存储了每个句子在sen中的范围，是累加的。
       sentence_length = (int *)malloc((MAX_SENTENCE + 1) * sizeof(int));
       // checkCUDAerr(cudaHostAlloc((void **)&sentence_length,(MAX_SENTENCE + 1) * sizeof(int) ,cudaHostAllocWriteCombined | cudaHostAllocMapped));
 
@@ -1465,6 +1473,8 @@ void TrainModelThread()
       uint64_t  offset = (file_size / num_procs) * my_rank;
       printf("[%d] offset: %ld file size: %ld\n", my_rank, offset, file_size);
       fseek(fi, 0, SEEK_SET);
+
+      size_t cur_words = 0; // currrent words load from local corpus
 
 #pragma omp atomic
       ready_threads++;
@@ -1502,24 +1512,20 @@ void TrainModelThread()
 // TODO: 改变读句子的方式
         while (cnt_sentence < MAX_SENTENCE)
         { // Read words
+          // 读一个句子的独立长度
           int temp_sent_len = 0;
           char tSentence[MAX_SENTENCE_LENGTH];
           char *wordTok;
           if (feof(fi))
             break;
-          fgets(tSentence, MAX_SENTENCE_LENGTH + 1, fi); // 读取一个句子
-          wordTok = strtok(tSentence, " \n\r\t");        // 分解句子，获取每个单词
-          while (1)
+          // 循环装载一个句子，直到到达最大长度或者遇到换行符 -1
+          while(1)
           {
-            if (wordTok == NULL)
-            {
-              word_count++;
+            // local corpus is done
+            if(word_count>= cu_local_corpus->size())
               break;
-            }
-            word = SearchVocab(wordTok);
-            wordTok = strtok(NULL, " \n\r\t");
-            if (word == -1)
-              continue;
+            // origin_id 里面包含换行符 -1
+            word =(*cu_local_corpus)[word_count];
             word_count++;
             if (word == 0)
             {
@@ -1547,8 +1553,10 @@ void TrainModelThread()
           if (temp_sent_len >= MAX_SENTENCE_LENGTH)
             break;
 
+		  // TODO: 考虑 cur_word > local corpus size && cnt_sentence < MAX_SENTENCE 的情况
           cnt_sentence++; // 句子的数量
           sentence_length[cnt_sentence] = total_sent_len;
+          // 一组中的总长度要限制
           if (total_sent_len >= (MAX_SENTENCE - 1) * 20)
             break; // sen 装的一组句子的所有词
         }
@@ -1772,7 +1780,7 @@ int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*lo
   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
   MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
   MPI_Get_processor_name(hostname, &hostname_len);
-  printf("[ %d ] vertex_cn : %ld local_corpus : %ld \n",my_rank,cu_vertex_cn->size(),cu_local_corpus->size());
+  printf("==== [ %d ] vertex_cn : %ld local_corpus : %ld \n",my_rank,cu_vertex_cn->size(),cu_local_corpus->size());
   
   printf("processor name: %s, number of processors: %d, rank: %d \n", hostname, num_procs, my_rank);
 

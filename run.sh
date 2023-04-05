@@ -22,6 +22,7 @@
 # Notes:
 #  Any additional notes or information about your script
 #
+set -x
 
 bin=./bin/huge_walk
 graph=../dataset/binary/$1.data

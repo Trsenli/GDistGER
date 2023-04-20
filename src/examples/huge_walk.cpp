@@ -1,5 +1,6 @@
 #include "walk.hpp"
 #include "option_helper.hpp"
+#include <cstdio>
 #include <string>
 #include <vector>
 // #include "dsgl.hpp"
@@ -106,9 +107,6 @@ int main(int argc, char **argv)
     for(vertex_id_t v_i=0; v_i < graph.v_num;v_i++){
         graph.new_sort[v_i] = v_i;
     }
-
-    // cout<<" new_sort size: "<<graph.new_sort.size()<<endl;
-
 
    
     printf("================= EMBEDDING ================\n");

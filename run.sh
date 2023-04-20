@@ -25,7 +25,7 @@
 
 bin=./bin/huge_walk
 graph=../dataset/binary/$1.data
-node_num=4
+node_num=1
 other_option=" -o ./out/walk.txt --make-undirected \
     -eoutput ./out/$1_emb.txt -size 128 -iter 1 -threads 10 -window 10 -negative 5 -batch-size 21 -min-count 0 -sample 1e-3 -alpha 0.01 -debug 2 "
 
@@ -33,6 +33,8 @@ if [ $1 = "wiki" ];then
     mpiexec -n $node_num $bin -g $graph -v 7115 -w 7115 --min_L 20 --min_R 5 $other_option
 elif [ $1 = "ytb" ];then
     mpiexec -n $node_num $bin -g $graph -v 1138499 -w 1138499 --min_L 20 --min_R 10 $other_option
+elif [ $1 = "soc" ];then
+    mpiexec -n $node_num $bin -g $graph -v 1632803  -w 1632803  --min_L 20 --min_R 5 $other_option
 fi;
 
 

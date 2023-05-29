@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <cuda_profiler_api.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,9 +24,8 @@
 // #include "mpi_helper.hpp"
 // #include "walk.hpp"
 
-
+using namespace std;
 using std::vector;
-using std::map;
 
 #define MAX_STRING 100
 #define EXP_TABLE_SIZE 1000
@@ -34,7 +34,7 @@ using std::map;
 #define MAX_CODE_LENGTH 40
 #define MPI_SCALAR MPI_FLOAT
 
-#define MAX_SENTENCE 10000
+#define MAX_SENTENCE 700
 #define checkCUDAerr(err)                                                  \
   {                                                                        \
     cudaError_t cet = err;                                                 \
@@ -92,6 +92,7 @@ struct vocab_vertex
 };
 vector<vocab_vertex> v_vocab;
 vector<vertex_id_t> hash2v_vocab;
+double datamove_time = 0.0;
 // ===================
 
 // FOR CUDA
@@ -1152,9 +1153,9 @@ void InitNet()
     for (a = 0; a < vocab_size; a++)
       for (b = 0; b < layer1_size; b++)
         syn1neg[a * layer1_size + b] = 0;
-    // checkCUDAerr(cudaMalloc((void **)&d_syn1, (long long)vocab_size * layer1_size * sizeof(float))); // d_syn1 对应的 syn1，这里是 syn1neg
-    // checkCUDAerr(cudaMemcpy(d_syn1, syn1neg, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
-    checkCUDAerr(cudaHostGetDevicePointer(&d_syn1, syn1neg, 0));
+    checkCUDAerr(cudaMalloc((void **)&d_syn1, (long long)vocab_size * layer1_size * sizeof(float))); // d_syn1 对应的 syn1，这里是 syn1neg
+    checkCUDAerr(cudaMemcpy(d_syn1, syn1neg, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
+    // checkCUDAerr(cudaHostGetDevicePointer(&d_syn1, syn1neg, 0));
   }
   for (a = 0; a < vocab_size; a++)
     for (b = 0; b < layer1_size; b++)
@@ -1162,9 +1163,9 @@ void InitNet()
       next_random = next_random * (unsigned long long)25214903917 + 11;
       syn0[a * layer1_size + b] = (((next_random & 0xFFFF) / (float)65536) - 0.5) / layer1_size;
     }
-  // checkCUDAerr(cudaMalloc((void **)&d_syn0, (long long)vocab_size * layer1_size * sizeof(float)));
-  // checkCUDAerr(cudaMemcpy(d_syn0, syn0, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
-  checkCUDAerr(cudaHostGetDevicePointer(&d_syn0, syn0, 0));
+  checkCUDAerr(cudaMalloc((void **)&d_syn0, (long long)vocab_size * layer1_size * sizeof(float)));
+  checkCUDAerr(cudaMemcpy(d_syn0, syn0, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
+  // checkCUDAerr(cudaHostGetDevicePointer(&d_syn0, syn0, 0));
   // CreateBinaryTree();
 }
 
@@ -1224,8 +1225,11 @@ void sgKernel(int *d_sen, int *d_sent_len, int *d_negSample, float alpha, int cn
                                            d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
       break;
     case 300:
-      __sgNegReuse<300><<<gDim, bDimNeg>>>(window, layer1_size, negative, vocab_size, alpha,
-                                           d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
+      __old_sgNegReuse<300><<<gDim, bDimNeg>>> 
+          (window, layer1_size, negative, vocab_size, alpha,
+           d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
+      // __sgNegReuse<300><<<gDim, bDimNeg>>>(window, layer1_size, negative, vocab_size, alpha,
+                                           // d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
       break;
     default:
       printf("Can't support on vector size = %lld\n", layer1_size);
@@ -1260,6 +1264,23 @@ void sgKernel(int *d_sen, int *d_sent_len, int *d_negSample, float alpha, int cn
   }
 }
 
+int num_syncs = 0;
+int val_sync_vocab_size = 0;
+void sync_CPU_with_GPU()
+{
+  num_syncs += MAX_SENTENCE*10;
+  int sync_chunk_size = message_size * 1024 * 1024 /(layer1_size * 4);
+  // int sync_vocab_size =  min((long long)(1 << getNumZeros(num_syncs)) * min_sync_words, vocab_size);
+  int num_rounds = val_sync_vocab_size/ sync_chunk_size + ((val_sync_vocab_size% sync_chunk_size > 0) ? 1 : 0);
+  for (int r = 0 ; r < num_rounds; r++) {
+    int start = r * sync_chunk_size;
+    int sync_size = min(sync_chunk_size,val_sync_vocab_size- start);
+    checkCUDAerr(cudaMemcpy(syn0+start*layer1_size, d_syn0+start*layer1_size, sync_size*layer1_size, cudaMemcpyDeviceToHost));
+    checkCUDAerr(cudaMemcpy(syn1neg+start*layer1_size, d_syn1+start*layer1_size, sync_size*layer1_size, cudaMemcpyDeviceToHost));
+  }
+    cudaDeviceSynchronize();
+}
+
 void word_freq_block() // Ma
 {
 
@@ -1290,6 +1311,20 @@ __global__ void  Test(int* a,int sz)
   if(tid == 0)printf("Test ok\n");
 
 }
+void sync_GPU_with_CPU(unsigned int mpi_num_syncs)
+{
+  int sync_chunk_size = message_size * 1024 * 1024 /(layer1_size * 4);
+  int sync_vocab_size =  min((long long)(1 << getNumZeros(mpi_num_syncs)) * min_sync_words, vocab_size);
+  int num_rounds = sync_vocab_size / sync_chunk_size + ((sync_vocab_size % sync_chunk_size > 0) ? 1 : 0);
+  for (int r = 0 ; r < num_rounds; r++) {
+    int start = r * sync_chunk_size;
+    int sync_size = min(sync_chunk_size,sync_vocab_size - start);
+    checkCUDAerr(cudaMemcpy(syn0+start*layer1_size, d_syn0+start*layer1_size, sync_size*layer1_size, cudaMemcpyDeviceToHost));
+    checkCUDAerr(cudaMemcpy(syn1neg+start*layer1_size, d_syn1+start*layer1_size, sync_size*layer1_size, cudaMemcpyDeviceToHost));
+  }
+    cudaDeviceSynchronize();
+}
+
 void TrainModelThread()
 {
 
@@ -1298,7 +1333,6 @@ void TrainModelThread()
   int active_threads = 1;
   int num_threads = 2;
 
-// TODO: 本地磁盘加载，换成 local_corpus
 
 #pragma omp parallel num_threads(num_threads)
   {
@@ -1347,7 +1381,6 @@ void TrainModelThread()
           {
             full_sync_count++;
             sync_vocab_size = vocab_size;
-              printf("%d vocab size : %lld",__LINE__,vocab_size);
             int num_rounds = sync_vocab_size / sync_chunk_size + ((sync_vocab_size % sync_chunk_size > 0) ? 1 : 0);
             for (int r = 0; r < num_rounds; r++)
             {
@@ -1432,8 +1465,13 @@ void TrainModelThread()
               // printf("syn_ind: %d %d \n", i, sync_ind[i]);
               memcpy(syn0 + (size_t)sync_ind[i] * layer1_size, sync_block_in + (i)*layer1_size, layer1_size * sizeof(real));
               memcpy(syn1neg + (size_t)sync_ind[i] * layer1_size, sync_block_out + (i)*layer1_size, layer1_size * sizeof(real));
+              // checkCUDAerr(cudaMemcpy(d_syn0 + (size_t)sync_ind[i] * layer1_size,syn0 + (size_t)sync_ind[i] * layer1_size ,layer1_size * sizeof(real) , cudaMemcpyHostToDevice));
+              // checkCUDAerr(cudaMemcpy(d_syn1 + (size_t)sync_ind[i] * layer1_size,syn1neg + (size_t)sync_ind[i] * layer1_size ,layer1_size * sizeof(real) , cudaMemcpyHostToDevice));
 
             }
+              Timer dvTimer;
+              // sync_GPU_with_CPU(num_syncs);
+              datamove_time += dvTimer.duration();
           }
 
           // let it go!
@@ -1536,7 +1574,6 @@ void TrainModelThread()
         sentence_length[0] = 0;
         int  cnt_sentence = 0;
 
-// TODO: 改变读句子的方式
         while (cnt_sentence < MAX_SENTENCE)
         { // Read words
           int temp_sent_len = 0;
@@ -1555,6 +1592,13 @@ void TrainModelThread()
                   exit(3);
                 word_count++;
                 word = hash2v_vocab[origin_word]; 
+                // if (sample > 0)
+                // { //  重采样
+                //   float ran = (sqrt(v_vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / v_vocab[word].cn;
+                //   int next_random_t = rand();
+                //   if (ran < (next_random_t & 0xFFFF) / (float)65536)
+                //     continue;
+                // }
                 sen[total_sent_len] = word;
                 total_sent_len ++;
                 temp_sent_len ++;
@@ -1651,25 +1695,35 @@ void TrainModelThread()
             negSample[i] = tempSample;
         }
         // printf("[ %d ] %d  %d\n",my_rank,cnt_sentence,total_sent_len);
+        Timer dvTimer;
         checkCUDAerr(cudaMemcpy(d_negSample, negSample, cnt_sentence * negative * sizeof(int), cudaMemcpyHostToDevice));
         checkCUDAerr(cudaMemcpy(d_sen, sen, total_sent_len * sizeof(int), cudaMemcpyHostToDevice));
         checkCUDAerr(cudaMemcpy(d_sent_len, sentence_length, (cnt_sentence + 1) * sizeof(int), cudaMemcpyHostToDevice));
+        datamove_time += dvTimer.duration();
         if(cnt_sentence > MAX_SENTENCE)exit(1);
       
         // if (cbow) 
         //   cbowKernel(d_sen, d_sent_len, alpha, cnt_sentence, reduSize);
         // else
-          sgKernel(d_sen, d_sent_len, d_negSample, alpha, cnt_sentence, reduSize);
+
+        sgKernel(d_sen, d_sent_len, d_negSample, alpha, cnt_sentence, reduSize);
 
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
             printf("[ %d ]%s %d : %s\n",my_rank, __FILE__, __LINE__, cudaGetErrorString(err));
             // Possibly: exit(-1) if program cannot continue....
         } 
-
-      }
-      cudaDeviceSynchronize();
+        dvTimer.restart();
       // checkCUDAerr(cudaMemcpy(syn0, d_syn0, vocab_size * layer1_size * sizeof(float), cudaMemcpyDeviceToHost));
+      // cudaMemcpy(syn1neg, d_syn1, vocab_size * layer1_size * sizeof(float), cudaMemcpyDeviceToHost));
+          sync_CPU_with_GPU(); 
+      // cudaDeviceSynchronize();
+
+
+      datamove_time += dvTimer.duration(); 
+      }
+      checkCUDAerr(cudaMemcpy(syn0, d_syn0, vocab_size * layer1_size * sizeof(float), cudaMemcpyDeviceToHost));
+      cudaDeviceSynchronize();
 
       // fclose(fi);
 
@@ -1725,7 +1779,7 @@ void TrainModel()
 
   TrainModelThread();
 
-  printf("[ INFO ] Train Time : %.2f \n", timer.duration());
+  printf("[ INFO ] Train Time : %f DataMove Time: %f\n", timer.duration(),datamove_time);
 
   // 释放空间
   cudaFree(d_table);
@@ -1836,7 +1890,7 @@ int ArgPos(char *str, int argc, char **argv)
 
 int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*local_corpus)
 {
-  
+
   cu_vertex_cn = vertex_cn;
   cu_local_corpus = local_corpus;
   
@@ -1940,6 +1994,8 @@ int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*lo
     classes = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-reuse-neg", argc, argv)) > 0)
     reuseNeg = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-sync-size", argc, argv)) > 0)
+    val_sync_vocab_size  = atoi(argv[i + 1]);
   
 // 指定参数
 
@@ -1958,8 +2014,13 @@ int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*lo
   checkCUDAerr(cudaMalloc((void **)&d_expTable, (EXP_TABLE_SIZE + 1) * sizeof(float)));                         // 申请 device 空间
   checkCUDAerr(cudaMemcpy(d_expTable, expTable, (EXP_TABLE_SIZE + 1) * sizeof(float), cudaMemcpyHostToDevice)); // 把host的expTable 转移到 d_expTable 中
 
-  printf("layer1_size: %lld \n",layer1_size);
+  printf("layer1_size: %lld sync_size: %d \n",layer1_size,val_sync_vocab_size);
+
+  // cudaProfilerStart();
   TrainModel();
+  // cudaProfilerStop();
+
+
 
   // memory free
   // free(vocab_codelen);

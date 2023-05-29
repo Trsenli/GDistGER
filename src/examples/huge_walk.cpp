@@ -76,7 +76,7 @@ int main(int argc, char **argv)
         // printf("[p%u][sum time:]%lf [walk time:]%lf [other time:]%lf\n", graph.get_local_partition_id(), sum_time, walk_time, graph.other_time);
     }
     // MPI_Barrier(MPI_COMM_WORLD);
-    printf("> [p%d RANDOM WALKING TIME:] %lf \n",get_mpi_rank(), timer.duration());
+    printf("> [p%d RANDOM WALKING TIME:] %lf  msg_produce time: %lf\n",get_mpi_rank(), timer.duration(),graph.msg_produce_time);
     // if(get_mpi_rank() == 0){
     //     FILE* stream_log = fopen("stream.log","a");
     //     fprintf(stream_log,"%f,",timer.duration());

@@ -1,5 +1,6 @@
 #include "walk.hpp"
 #include "option_helper.hpp"
+#include <cstdio>
 #include <string>
 #include <vector>
 // #include "dsgl.hpp"
@@ -75,7 +76,7 @@ int main(int argc, char **argv)
         // printf("[p%u][sum time:]%lf [walk time:]%lf [other time:]%lf\n", graph.get_local_partition_id(), sum_time, walk_time, graph.other_time);
     }
     // MPI_Barrier(MPI_COMM_WORLD);
-    printf("> [p%d RANDOM WALKING TIME:] %lf \n",get_mpi_rank(), timer.duration());
+    printf("> [p%d RANDOM WALKING TIME:] %lf  msg_produce time: %lf\n",get_mpi_rank(), timer.duration(),graph.msg_produce_time);
     // if(get_mpi_rank() == 0){
     //     FILE* stream_log = fopen("stream.log","a");
     //     fprintf(stream_log,"%f,",timer.duration());
@@ -106,9 +107,6 @@ int main(int argc, char **argv)
     for(vertex_id_t v_i=0; v_i < graph.v_num;v_i++){
         graph.new_sort[v_i] = v_i;
     }
-
-    // cout<<" new_sort size: "<<graph.new_sort.size()<<endl;
-
 
    
     printf("================= EMBEDDING ================\n");

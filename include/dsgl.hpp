@@ -66,7 +66,7 @@ public:
 
 int binary = 0, debug_mode = 2;
 bool disk = false;
-int num_procs = 1, num_threads = 2, negative = 5, min_count = 5, min_reduce = 1, iter = 5, window = 5, batch_size = 11, my_rank = -1;
+int num_procs = 1, num_threads = 12, negative = 5, min_count = 5, min_reduce = 1, iter = 5, window = 5, batch_size = 11, my_rank = -1;
 size_t hidden_size = 100;
 size_t vocab_size = 0;
 int vocab_max_size = 1000, min_sync_words = 1024, full_sync_times = 0;

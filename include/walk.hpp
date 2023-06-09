@@ -4,6 +4,7 @@
 #include "type.hpp"
 #include "graph.hpp"
 #include "path.hpp"
+#include "util.hpp"
 
 #include <numeric>
 #include <vector>
@@ -399,6 +400,7 @@ public:
     vector<vertex_id_t> new_sort; 
     vertex_id_t minLength = 20;
     vertex_id_t init_round = 5;
+    double msg_produce_time = 0.0;
     
     void get_new_sort()
     {
@@ -805,6 +807,7 @@ public:
             bool use_parallel = (active_walker_num >= OMP_PARALLEL_THRESHOLD);
             // use_parallel = false;
             auto msg_producer = [&] (void) {
+                Timer msg_producer_timer;
                 walker_id_t progress = 0;
                 walker_id_t data_amount = local_walker_num;
                 auto *data_begin = local_walkers;
@@ -1006,6 +1009,7 @@ public:
                     }
                 }
                 local_walker_num = 0;
+              this->msg_produce_time += msg_producer_timer.duration();
             };
             auto msg_consumer = [&](Message<Walker<walker_data_t> > *begin, Message<Walker<walker_data_t> > *end)
             {

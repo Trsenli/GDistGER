@@ -1,9 +1,12 @@
+#include <cstdlib>
+#include <cuda_profiler_api.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <cuda_runtime.h>
 #include <unistd.h>
+#include <algorithm>
 
 #include <omp.h>
 #include <mpi.h>
@@ -21,9 +24,8 @@
 // #include "mpi_helper.hpp"
 // #include "walk.hpp"
 
-
+using namespace std;
 using std::vector;
-using std::map;
 
 #define MAX_STRING 100
 #define EXP_TABLE_SIZE 1000
@@ -32,7 +34,7 @@ using std::map;
 #define MAX_CODE_LENGTH 40
 #define MPI_SCALAR MPI_FLOAT
 
-#define MAX_SENTENCE 10000
+#define MAX_SENTENCE 700
 #define checkCUDAerr(err)                                                  \
   {                                                                        \
     cudaError_t cet = err;                                                 \
@@ -67,11 +69,10 @@ struct vocab_word
 char train_file[MAX_STRING], output_file[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
-// TODO: 支持 mincount 
-int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 0, min_reduce = 1, reuseNeg = 1;
+int binary = 0, cbow = 1, debug_mode = 2, window = 5, min_count = 5, min_reduce = 1, reuseNeg = 1;
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 128;
-long long train_words = 0, word_count_actual = 0, iter = 1, file_size = 0, classes = 0;
+long long train_words = 0, word_count_actual = 0, iter = 5, file_size = 0, classes = 0;
 float alpha = 0.025, starting_alpha, sample = 1e-3;
 float *syn0, *syn1, *syn1neg, *expTable;
 clock_t start;
@@ -91,6 +92,7 @@ struct vocab_vertex
 };
 vector<vocab_vertex> v_vocab;
 vector<vertex_id_t> hash2v_vocab;
+double datamove_time = 0.0;
 // ===================
 
 // FOR CUDA
@@ -717,16 +719,16 @@ void InitUnigramTable()
   double d1, power = 0.75;
   table = (int *)malloc(table_size * sizeof(int));
   for (a = 0; a < vocab_size; a++)
-    train_words_pow += pow(vocab[a].cn, power);
+    train_words_pow += pow(v_vocab[a].cn, power);
   i = 0;
-  d1 = pow(vocab[i].cn, power) / train_words_pow;
+  d1 = pow(v_vocab[i].cn, power) / train_words_pow;
   for (a = 0; a < table_size; a++)
   {
     table[a] = i;
     if (a / (double)table_size > d1)
     {
       i++;
-      d1 += pow(vocab[i].cn, power) / train_words_pow;
+      d1 += pow(v_vocab[i].cn, power) / train_words_pow;
     }
     if (i >= vocab_size)
       i = vocab_size - 1;
@@ -987,6 +989,37 @@ void CreateBinaryTree()
   free(parent_node);
 }
 
+void ConstVobcabFromMemory()
+{
+    vocab_size = cu_vertex_cn->size();
+    v_vocab.resize(vocab_size);
+    for(int i=0; i< v_vocab.size();i++) 
+    {
+      v_vocab[i].cn = (*cu_vertex_cn)[i];
+      v_vocab[i].id = i;
+    }
+    
+    sort(v_vocab.begin(), v_vocab.end(), [](vocab_vertex a, vocab_vertex b)
+         { return a.cn > b.cn; });
+
+    train_words = 0;
+    for (int i = 0; i < cu_vertex_cn->size(); i++)
+    {
+        train_words += (*cu_vertex_cn)[i];
+    }
+
+    hash2v_vocab.resize(vocab_size);
+    for (int i = 0; i < vocab_size; i++)
+    {
+        hash2v_vocab[v_vocab[i].id] = i;
+    }
+    if (my_rank == 0 && debug_mode > 0)
+    {
+        printf("vertex Vocab size: %lld\n", vocab_size);
+        printf("train_words: %lld\n", train_words);
+    }
+}
+
 void LearnVocabFromTrainFile()
 {
   char word[MAX_STRING];
@@ -1016,15 +1049,15 @@ void LearnVocabFromTrainFile()
     i = SearchVocab(word);
     if (i == -1)
     {
-      a = AddWordToVocab(word);
-      vocab[a].cn = 1; // 词存在 vocab 里面
+      // a = AddWordToVocab(word);
+      // vocab[a].cn = 1; // 词存在 vocab 里面
     }
     else
       vocab[i].cn++;
     if (vocab_size > vocab_hash_size * 0.7)
       ReduceVocab();
   }
-  SortVocab();
+  // SortVocab();
   if (debug_mode > 0)
   {
     printf("Vocab size: %lld\n", vocab_size);
@@ -1120,9 +1153,9 @@ void InitNet()
     for (a = 0; a < vocab_size; a++)
       for (b = 0; b < layer1_size; b++)
         syn1neg[a * layer1_size + b] = 0;
-    // checkCUDAerr(cudaMalloc((void **)&d_syn1, (long long)vocab_size * layer1_size * sizeof(float))); // d_syn1 对应的 syn1，这里是 syn1neg
-    // checkCUDAerr(cudaMemcpy(d_syn1, syn1neg, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
-    checkCUDAerr(cudaHostGetDevicePointer(&d_syn1, syn1neg, 0));
+    checkCUDAerr(cudaMalloc((void **)&d_syn1, (long long)vocab_size * layer1_size * sizeof(float))); // d_syn1 对应的 syn1，这里是 syn1neg
+    checkCUDAerr(cudaMemcpy(d_syn1, syn1neg, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
+    // checkCUDAerr(cudaHostGetDevicePointer(&d_syn1, syn1neg, 0));
   }
   for (a = 0; a < vocab_size; a++)
     for (b = 0; b < layer1_size; b++)
@@ -1130,10 +1163,10 @@ void InitNet()
       next_random = next_random * (unsigned long long)25214903917 + 11;
       syn0[a * layer1_size + b] = (((next_random & 0xFFFF) / (float)65536) - 0.5) / layer1_size;
     }
-  // checkCUDAerr(cudaMalloc((void **)&d_syn0, (long long)vocab_size * layer1_size * sizeof(float)));
-  // checkCUDAerr(cudaMemcpy(d_syn0, syn0, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
-  checkCUDAerr(cudaHostGetDevicePointer(&d_syn0, syn0, 0));
-  CreateBinaryTree();
+  checkCUDAerr(cudaMalloc((void **)&d_syn0, (long long)vocab_size * layer1_size * sizeof(float)));
+  checkCUDAerr(cudaMemcpy(d_syn0, syn0, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
+  // checkCUDAerr(cudaHostGetDevicePointer(&d_syn0, syn0, 0));
+  // CreateBinaryTree();
 }
 
 void cbowKernel(int *d_sen, int *d_sent_len, float alpha, int cnt_sentence, int reduSize)
@@ -1170,8 +1203,6 @@ void sgKernel(int *d_sen, int *d_sent_len, int *d_negSample, float alpha, int cn
   // int gDim= cnt_sentence; // grid size 一个grid 里有 cnt_sentence 个block
   int gDim = cnt_sentence / 2 + cnt_sentence % 2 ? 1 : 0;
 
-  // printf("[%d]bDimNeg %d gDim %d cnt_sentence: %d\n",my_rank,32*(negative+1),gDim,cnt_sentence);
-  // exit(1);
   if (reuseNeg)
   {                                    // A sentence share negative samples
     dim3 bDimNeg(32, negative + 1, 1); // block 维度
@@ -1181,7 +1212,6 @@ void sgKernel(int *d_sen, int *d_sent_len, int *d_negSample, float alpha, int cn
     {
     case 128:
       __old_sgNegReuse<128><<<gDim, bDimNeg>>> 
-      // __old_sgNegReuse<128><<<1000,100,100>>> 
           (window, layer1_size, negative, vocab_size, alpha,
            d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
       break;
@@ -1195,8 +1225,11 @@ void sgKernel(int *d_sen, int *d_sent_len, int *d_negSample, float alpha, int cn
                                            d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
       break;
     case 300:
-      __sgNegReuse<300><<<gDim, bDimNeg>>>(window, layer1_size, negative, vocab_size, alpha,
-                                           d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
+      __old_sgNegReuse<300><<<gDim, bDimNeg>>> 
+          (window, layer1_size, negative, vocab_size, alpha,
+           d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
+      // __sgNegReuse<300><<<gDim, bDimNeg>>>(window, layer1_size, negative, vocab_size, alpha,
+                                           // d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
       break;
     default:
       printf("Can't support on vector size = %lld\n", layer1_size);
@@ -1231,15 +1264,32 @@ void sgKernel(int *d_sen, int *d_sent_len, int *d_negSample, float alpha, int cn
   }
 }
 
+int num_syncs = 0;
+int val_sync_vocab_size = 0;
+void sync_CPU_with_GPU()
+{
+  num_syncs += MAX_SENTENCE*10;
+  int sync_chunk_size = message_size * 1024 * 1024 /(layer1_size * 4);
+  // int sync_vocab_size =  min((long long)(1 << getNumZeros(num_syncs)) * min_sync_words, vocab_size);
+  int num_rounds = val_sync_vocab_size/ sync_chunk_size + ((val_sync_vocab_size% sync_chunk_size > 0) ? 1 : 0);
+  for (int r = 0 ; r < num_rounds; r++) {
+    int start = r * sync_chunk_size;
+    int sync_size = min(sync_chunk_size,val_sync_vocab_size- start);
+    checkCUDAerr(cudaMemcpy(syn0+start*layer1_size, d_syn0+start*layer1_size, sync_size*layer1_size, cudaMemcpyDeviceToHost));
+    checkCUDAerr(cudaMemcpy(syn1neg+start*layer1_size, d_syn1+start*layer1_size, sync_size*layer1_size, cudaMemcpyDeviceToHost));
+  }
+    cudaDeviceSynchronize();
+}
+
 void word_freq_block() // Ma
 {
 
   word_freq_block_ind.push_back(0);
   int j = 1;
-  for (int i = 1; i < vocab_size; i++)
+  for (int i = 1; i < v_vocab.size(); i++)
   {
   //   // printf("freq: %d %d \n",i, v_vocab[i].cn);
-    if (vocab[i].cn != vocab[i - 1].cn)
+    if (v_vocab[i].cn != v_vocab[i - 1].cn)
     {
       word_freq_block_ind.push_back(i);
       // printf("freq: %d %d %d \n",i, j, v_vocab[i].cn);
@@ -1261,6 +1311,20 @@ __global__ void  Test(int* a,int sz)
   if(tid == 0)printf("Test ok\n");
 
 }
+void sync_GPU_with_CPU(unsigned int mpi_num_syncs)
+{
+  int sync_chunk_size = message_size * 1024 * 1024 /(layer1_size * 4);
+  int sync_vocab_size =  min((long long)(1 << getNumZeros(mpi_num_syncs)) * min_sync_words, vocab_size);
+  int num_rounds = sync_vocab_size / sync_chunk_size + ((sync_vocab_size % sync_chunk_size > 0) ? 1 : 0);
+  for (int r = 0 ; r < num_rounds; r++) {
+    int start = r * sync_chunk_size;
+    int sync_size = min(sync_chunk_size,sync_vocab_size - start);
+    checkCUDAerr(cudaMemcpy(syn0+start*layer1_size, d_syn0+start*layer1_size, sync_size*layer1_size, cudaMemcpyDeviceToHost));
+    checkCUDAerr(cudaMemcpy(syn1neg+start*layer1_size, d_syn1+start*layer1_size, sync_size*layer1_size, cudaMemcpyDeviceToHost));
+  }
+    cudaDeviceSynchronize();
+}
+
 void TrainModelThread()
 {
 
@@ -1269,7 +1333,6 @@ void TrainModelThread()
   int active_threads = 1;
   int num_threads = 2;
 
-// TODO: 本地磁盘加载，换成 local_corpus
 
 #pragma omp parallel num_threads(num_threads)
   {
@@ -1318,7 +1381,6 @@ void TrainModelThread()
           {
             full_sync_count++;
             sync_vocab_size = vocab_size;
-            // }
             int num_rounds = sync_vocab_size / sync_chunk_size + ((sync_vocab_size % sync_chunk_size > 0) ? 1 : 0);
             for (int r = 0; r < num_rounds; r++)
             {
@@ -1403,8 +1465,13 @@ void TrainModelThread()
               // printf("syn_ind: %d %d \n", i, sync_ind[i]);
               memcpy(syn0 + (size_t)sync_ind[i] * layer1_size, sync_block_in + (i)*layer1_size, layer1_size * sizeof(real));
               memcpy(syn1neg + (size_t)sync_ind[i] * layer1_size, sync_block_out + (i)*layer1_size, layer1_size * sizeof(real));
+              // checkCUDAerr(cudaMemcpy(d_syn0 + (size_t)sync_ind[i] * layer1_size,syn0 + (size_t)sync_ind[i] * layer1_size ,layer1_size * sizeof(real) , cudaMemcpyHostToDevice));
+              // checkCUDAerr(cudaMemcpy(d_syn1 + (size_t)sync_ind[i] * layer1_size,syn1neg + (size_t)sync_ind[i] * layer1_size ,layer1_size * sizeof(real) , cudaMemcpyHostToDevice));
 
             }
+              Timer dvTimer;
+              // sync_GPU_with_CPU(num_syncs);
+              datamove_time += dvTimer.duration();
           }
 
           // let it go!
@@ -1422,7 +1489,9 @@ void TrainModelThread()
           }
 
           if (active_processes_global == 0)
-            break;
+          {
+              break;
+            }
           sync_start = omp_get_wtime();
         }
         else
@@ -1435,18 +1504,16 @@ void TrainModelThread()
     {
       // printf("id %d  process compute\n",id);
 
-      long long word_count = 0, last_word_count = 0;
-      int word = 0;
+      long long word, word_count = 0, last_word_count = 0;
       long long local_iter = iter;
+      long long  corpus_idx = 0;
+      
 
       // use in kernel
-      // 所有句子的累加长度,不包含换行符
       int total_sent_len, reduSize = 32;
       int *sen, *sentence_length, *d_sen, *d_sent_len;
-      // 里面装了一组句子，都在一起，扁平存储。 MAX*20应该只是单纯限制大小
-      sen = (int *)malloc(MAX_SENTENCE * 20 * sizeof(int)); 
+      sen = (int *)malloc(MAX_SENTENCE * 20 * sizeof(int)); // ？？
       // checkCUDAerr(cudaHostAlloc((void **)&sen,MAX_SENTENCE * 20 * sizeof(int) ,cudaHostAllocWriteCombined | cudaHostAllocMapped));
-      // 存储了每个句子在sen中的范围，是累加的。
       sentence_length = (int *)malloc((MAX_SENTENCE + 1) * sizeof(int));
       // checkCUDAerr(cudaHostAlloc((void **)&sentence_length,(MAX_SENTENCE + 1) * sizeof(int) ,cudaHostAllocWriteCombined | cudaHostAllocMapped));
 
@@ -1467,14 +1534,12 @@ void TrainModelThread()
       }
 
       clock_t now;
-      FILE *fi = fopen(train_file, "rb");
-      fseek(fi, 0, SEEK_END);
-      uint64_t file_size = ftell(fi);
-      uint64_t  offset = (file_size / num_procs) * my_rank;
-      printf("[%d] offset: %ld file size: %ld\n", my_rank, offset, file_size);
-      fseek(fi, 0, SEEK_SET);
-
-      size_t cur_words = 0; // currrent words load from local corpus
+      // FILE *fi = fopen(train_file, "rb");
+      // fseek(fi, 0, SEEK_END);
+      // uint64_t file_size = ftell(fi);
+      // uint64_t  offset = (file_size / num_procs) * my_rank;
+      // printf("[%d] offset: %ld file size: %ld\n", my_rank, offset, file_size);
+      // fseek(fi, 0, SEEK_SET);
 
 #pragma omp atomic
       ready_threads++;
@@ -1507,61 +1572,98 @@ void TrainModelThread()
         }
         total_sent_len = 0;
         sentence_length[0] = 0;
-        int cnt_sentence = 0;
+        int  cnt_sentence = 0;
 
-// TODO: 改变读句子的方式
         while (cnt_sentence < MAX_SENTENCE)
         { // Read words
-          // 读一个句子的独立长度
           int temp_sent_len = 0;
           char tSentence[MAX_SENTENCE_LENGTH];
-          char *wordTok;
-          if (feof(fi))
-            break;
-          // 循环装载一个句子，直到到达最大长度或者遇到换行符 -1
-          while(1)
-          {
-            // local corpus is done
-            if(word_count>= cu_local_corpus->size())
+          
+          if(corpus_idx >= cu_local_corpus->size())
               break;
-            // origin_id 里面包含换行符 -1
-            word =(*cu_local_corpus)[word_count];
-            word_count++;
-            if (word == 0)
-            {
-              word_count++;
-              break;
-            }
-            if (sample > 0)
-            { //  重采样
-              float ran = (sqrt(vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / vocab[word].cn;
-              int next_random_t = rand();
-              if (ran < (next_random_t & 0xFFFF) / (float)65536)
-                continue;
-            }
-            sen[total_sent_len] = word;
-            total_sent_len++;
-            temp_sent_len++;
-            if (temp_sent_len >= MAX_SENTENCE_LENGTH)
-              break;
+          
+          while (1) {
+                if(corpus_idx >= cu_local_corpus->size())break;
+                int origin_word = (*cu_local_corpus)[corpus_idx];
+                corpus_idx ++;
+                if(origin_word == -1)
+                  break;
+                if(origin_word < -1)
+                  exit(3);
+                word_count++;
+                word = hash2v_vocab[origin_word]; 
+                // if (sample > 0)
+                // { //  重采样
+                //   float ran = (sqrt(v_vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / v_vocab[word].cn;
+                //   int next_random_t = rand();
+                //   if (ran < (next_random_t & 0xFFFF) / (float)65536)
+                //     continue;
+                // }
+                sen[total_sent_len] = word;
+                total_sent_len ++;
+                temp_sent_len ++;
+                if(temp_sent_len >= MAX_SENTENCE_LENGTH)
+                  break;
           }
-          if (word == 0)
-          {
-            word_count++;
-            break;
-          }
-          if (temp_sent_len >= MAX_SENTENCE_LENGTH)
-            break;
 
-		  // TODO: 考虑 cur_word > local corpus size && cnt_sentence < MAX_SENTENCE 的情况
-          cnt_sentence++; // 句子的数量
+          cnt_sentence++;
           sentence_length[cnt_sentence] = total_sent_len;
-          // 一组中的总长度要限制
-          if (total_sent_len >= (MAX_SENTENCE - 1) * 20)
-            break; // sen 装的一组句子的所有词
+          if(total_sent_len >= (MAX_SENTENCE - 1) * 20)
+              break;
+
+
+        //   char *wordTok;
+        //   if (feof(fi))
+        //     break;
+        //   fgets(tSentence, MAX_SENTENCE_LENGTH + 1, fi); // 读取一个句子
+        //   wordTok = strtok(tSentence, " \n\r\t");        // 分解句子，获取每个单词
+        //   while (1)
+        //   {
+        //     if (wordTok == NULL)
+        //     {
+        //       word_count++;
+        //       break;
+        //     }
+        //     word = SearchVocab(wordTok);
+        //     wordTok = strtok(NULL, " \n\r\t");
+        //     if (word == -1)
+        //       continue;
+        //     word_count++;
+        //     if (word == 0)
+        //     {
+        //       word_count++;
+        //       break;
+        //     }
+        //     if (sample > 0)
+        //     { //  重采样
+        //       float ran = (sqrt(vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / vocab[word].cn;
+        //       int next_random_t = rand();
+        //       if (ran < (next_random_t & 0xFFFF) / (float)65536)
+        //         continue;
+        //     }
+        //     sen[total_sent_len] = word;
+        //     total_sent_len++;
+        //     temp_sent_len++;
+        //     if (temp_sent_len >= MAX_SENTENCE_LENGTH)
+        //       break;
+        //   }
+        //   if (word == 0)
+        //   {
+        //     word_count++;
+        //     break;
+        //   }
+        //   if (temp_sent_len >= MAX_SENTENCE_LENGTH)
+        //     break;
+
+        //   cnt_sentence++; // 句子的数量
+        //   sentence_length[cnt_sentence] = total_sent_len;
+        //   if (total_sent_len >= (MAX_SENTENCE - 1) * 20)
+        //     break; // sen 装的一组句子的所有词
         }
 
-        if (feof(fi) || (word_count > train_words / num_procs))
+        // if (feof(fi) || (word_count > train_words / num_procs))
+        
+        if(corpus_idx >=  cu_local_corpus->size())
         { // Initialize for iteration
           word_count_actual += word_count - last_word_count;
           local_iter--;
@@ -1576,7 +1678,8 @@ void TrainModelThread()
           for (int i = 0; i < MAX_SENTENCE + 1; i++)
             sentence_length[i] = 0;
           total_sent_len = 0;
-          fseek(fi, offset, SEEK_SET);
+            corpus_idx = 0;
+          // fseek(fi, offset, SEEK_SET);
           continue;
         }
 
@@ -1592,27 +1695,37 @@ void TrainModelThread()
             negSample[i] = tempSample;
         }
         // printf("[ %d ] %d  %d\n",my_rank,cnt_sentence,total_sent_len);
+        Timer dvTimer;
         checkCUDAerr(cudaMemcpy(d_negSample, negSample, cnt_sentence * negative * sizeof(int), cudaMemcpyHostToDevice));
         checkCUDAerr(cudaMemcpy(d_sen, sen, total_sent_len * sizeof(int), cudaMemcpyHostToDevice));
         checkCUDAerr(cudaMemcpy(d_sent_len, sentence_length, (cnt_sentence + 1) * sizeof(int), cudaMemcpyHostToDevice));
+        datamove_time += dvTimer.duration();
         if(cnt_sentence > MAX_SENTENCE)exit(1);
       
-        if (cbow) 
-          cbowKernel(d_sen, d_sent_len, alpha, cnt_sentence, reduSize);
-        else
-          sgKernel(d_sen, d_sent_len, d_negSample, alpha, cnt_sentence, reduSize);
+        // if (cbow) 
+        //   cbowKernel(d_sen, d_sent_len, alpha, cnt_sentence, reduSize);
+        // else
+
+        sgKernel(d_sen, d_sent_len, d_negSample, alpha, cnt_sentence, reduSize);
 
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
             printf("[ %d ]%s %d : %s\n",my_rank, __FILE__, __LINE__, cudaGetErrorString(err));
             // Possibly: exit(-1) if program cannot continue....
         } 
-
-      }
-      cudaDeviceSynchronize();
+        dvTimer.restart();
       // checkCUDAerr(cudaMemcpy(syn0, d_syn0, vocab_size * layer1_size * sizeof(float), cudaMemcpyDeviceToHost));
+      // cudaMemcpy(syn1neg, d_syn1, vocab_size * layer1_size * sizeof(float), cudaMemcpyDeviceToHost));
+          sync_CPU_with_GPU(); 
+      // cudaDeviceSynchronize();
 
-      fclose(fi);
+
+      datamove_time += dvTimer.duration(); 
+      }
+      checkCUDAerr(cudaMemcpy(syn0, d_syn0, vocab_size * layer1_size * sizeof(float), cudaMemcpyDeviceToHost));
+      cudaDeviceSynchronize();
+
+      // fclose(fi);
 
       // free memory
       free(sen);
@@ -1637,28 +1750,36 @@ void TrainModel()
   if (read_vocab_file[0] != 0)
     ReadVocab();
   else
-    LearnVocabFromTrainFile(); // 构建词表
+    {
+      // LearnVocabFromTrainFile(); // 构建词表
+      ConstVobcabFromMemory();
+    }
+
+  printf("[ %d ]Build Vocab ok\n",my_rank);
 
   if (save_vocab_file[0] != 0)
     SaveVocab();
   if (output_file[0] == 0)
     return;
   InitNet(); // 初始化 syn0 和 syn1 对应着 wih 和 woh ，并且在 GPU 里申请空间，并且cpy过去
+  printf("[ %d ]InitNet ok\n",my_rank);
   if (hs > 0)
     InitVocabStructCUDA();
   if (negative > 0)
     InitUnigramTable();
+  printf("[ %d ]InitUnigramTable ok\n",my_rank);
 
   word_freq_block();
 
   start = clock();
   srand(time(NULL));
 
+  printf("[ %d ]Preparatory work done\n",my_rank);
   Timer timer;
 
   TrainModelThread();
 
-  printf("[ INFO ] Train Time : %.2f \n", timer.duration());
+  printf("[ INFO ] Train Time : %f DataMove Time: %f\n", timer.duration(),datamove_time);
 
   // 释放空间
   cudaFree(d_table);
@@ -1669,86 +1790,86 @@ void TrainModel()
   cudaFree(d_vocab_code);
  
 
-  fo = fopen(output_file, "wb");
-  if (classes == 0)
-  {
-    // Save the word vectors
-    fprintf(fo, "%lld %lld\n", vocab_size, layer1_size);
-    for (a = 0; a < vocab_size; a++)
-    {
-      fprintf(fo, "%s ", vocab[a].word);
-      if (binary)
-        for (b = 0; b < layer1_size; b++)
-          fwrite(&syn0[a * layer1_size + b], sizeof(float), 1, fo);
-      else
-        for (b = 0; b < layer1_size; b++)
-          fprintf(fo, "%lf ", syn0[a * layer1_size + b]);
-      fprintf(fo, "\n");
-    }
-  }
-  else
-  {
-    // Run K-means on the word vectors
-    int clcn = classes, iter = 10, closeid;
-    int *centcn = (int *)malloc(classes * sizeof(int));
-    int *cl = (int *)calloc(vocab_size, sizeof(int));
-    float closev, x;
-    float *cent = (float *)calloc(classes * layer1_size, sizeof(float));
+  // fo = fopen(output_file, "wb");
+  // if (classes == 0)
+  // {
+  //   // Save the word vectors
+  //   fprintf(fo, "%lld %lld\n", vocab_size, layer1_size);
+  //   for (a = 0; a < vocab_size; a++)
+  //   {
+  //     fprintf(fo, "%u ", v_vocab[a].id);
+  //     if (binary)
+  //       for (b = 0; b < layer1_size; b++)
+  //         fwrite(&syn0[a * layer1_size + b], sizeof(float), 1, fo);
+  //     else
+  //       for (b = 0; b < layer1_size; b++)
+  //         fprintf(fo, "%lf ", syn0[a * layer1_size + b]);
+  //     fprintf(fo, "\n");
+  //   }
+  // }
+  // else
+  // {
+  //   // Run K-means on the word vectors
+  //   int clcn = classes, iter = 10, closeid;
+  //   int *centcn = (int *)malloc(classes * sizeof(int));
+  //   int *cl = (int *)calloc(vocab_size, sizeof(int));
+  //   float closev, x;
+  //   float *cent = (float *)calloc(classes * layer1_size, sizeof(float));
 
-    for (a = 0; a < vocab_size; a++)
-      cl[a] = a % clcn;
-    for (a = 0; a < iter; a++)
-    {
-      for (b = 0; b < clcn * layer1_size; b++)
-        cent[b] = 0;
-      for (b = 0; b < clcn; b++)
-        centcn[b] = 1;
-      for (c = 0; c < vocab_size; c++)
-      {
-        for (d = 0; d < layer1_size; d++)
-          cent[layer1_size * cl[c] + d] += syn0[c * layer1_size + d];
-        centcn[cl[c]]++;
-      }
-      for (b = 0; b < clcn; b++)
-      {
-        closev = 0;
-        for (c = 0; c < layer1_size; c++)
-        {
-          cent[layer1_size * b + c] /= centcn[b];
-          closev += cent[layer1_size * b + c] * cent[layer1_size * b + c];
-        }
-        closev = sqrt(closev);
-        for (c = 0; c < layer1_size; c++)
-          cent[layer1_size * b + c] /= closev;
-      }
-      for (c = 0; c < vocab_size; c++)
-      {
-        closev = -10;
-        closeid = 0;
-        for (d = 0; d < clcn; d++)
-        {
-          x = 0;
-          for (b = 0; b < layer1_size; b++)
-            x += cent[layer1_size * d + b] * syn0[c * layer1_size + b];
-          if (x > closev)
-          {
-            closev = x;
-            closeid = d;
-          }
-        }
-        cl[c] = closeid;
-      }
-    }
+  //   for (a = 0; a < vocab_size; a++)
+  //     cl[a] = a % clcn;
+  //   for (a = 0; a < iter; a++)
+  //   {
+  //     for (b = 0; b < clcn * layer1_size; b++)
+  //       cent[b] = 0;
+  //     for (b = 0; b < clcn; b++)
+  //       centcn[b] = 1;
+  //     for (c = 0; c < vocab_size; c++)
+  //     {
+  //       for (d = 0; d < layer1_size; d++)
+  //         cent[layer1_size * cl[c] + d] += syn0[c * layer1_size + d];
+  //       centcn[cl[c]]++;
+  //     }
+  //     for (b = 0; b < clcn; b++)
+  //     {
+  //       closev = 0;
+  //       for (c = 0; c < layer1_size; c++)
+  //       {
+  //         cent[layer1_size * b + c] /= centcn[b];
+  //         closev += cent[layer1_size * b + c] * cent[layer1_size * b + c];
+  //       }
+  //       closev = sqrt(closev);
+  //       for (c = 0; c < layer1_size; c++)
+  //         cent[layer1_size * b + c] /= closev;
+  //     }
+  //     for (c = 0; c < vocab_size; c++)
+  //     {
+  //       closev = -10;
+  //       closeid = 0;
+  //       for (d = 0; d < clcn; d++)
+  //       {
+  //         x = 0;
+  //         for (b = 0; b < layer1_size; b++)
+  //           x += cent[layer1_size * d + b] * syn0[c * layer1_size + b];
+  //         if (x > closev)
+  //         {
+  //           closev = x;
+  //           closeid = d;
+  //         }
+  //       }
+  //       cl[c] = closeid;
+  //     }
+  //   }
 
     // Save the K-means classes
-    for (a = 0; a < vocab_size; a++)
-      fprintf(fo, "%s %d\n", vocab[a].word, cl[a]);
+    // for (a = 0; a < vocab_size; a++)
+    //   fprintf(fo, "%s %d\n", vocab[a].word, cl[a]);
 
-    free(centcn);
-    free(cent);
-    free(cl);
-  }
-  fclose(fo);
+  //   free(centcn);
+  //   free(cent);
+  //   free(cl);
+  // }
+  // fclose(fo);
 }
 
 int ArgPos(char *str, int argc, char **argv)
@@ -1769,7 +1890,7 @@ int ArgPos(char *str, int argc, char **argv)
 
 int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*local_corpus)
 {
-  
+
   cu_vertex_cn = vertex_cn;
   cu_local_corpus = local_corpus;
   
@@ -1780,9 +1901,13 @@ int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*lo
   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
   MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
   MPI_Get_processor_name(hostname, &hostname_len);
-  printf("==== [ %d ] vertex_cn : %ld local_corpus : %ld \n",my_rank,cu_vertex_cn->size(),cu_local_corpus->size());
+  printf("[ %d ] vertex_cn : %ld local_corpus : %ld \n",my_rank,cu_vertex_cn->size(),cu_local_corpus->size());
   
   printf("processor name: %s, number of processors: %d, rank: %d \n", hostname, num_procs, my_rank);
+
+    // for (int i=0 ; i< 100 ; i++) {
+    //   printf("%d ",(*cu_local_corpus)[i]);
+    // }
 
   int i;
   if (argc == 1)
@@ -1869,10 +1994,12 @@ int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*lo
     classes = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-reuse-neg", argc, argv)) > 0)
     reuseNeg = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-sync-size", argc, argv)) > 0)
+    val_sync_vocab_size  = atoi(argv[i + 1]);
   
 // 指定参数
 
-  strcpy(train_file,"/home/lzl/lzlmnt/GDistGER/corpus/wiki_corpus.txt");
+  // strcpy(train_file,"/home/lzl/lzlmnt/GDistGER/corpus/wiki_corpus.txt");
   strcpy(output_file,"vectors.bin");
 
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
@@ -1887,12 +2014,17 @@ int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*lo
   checkCUDAerr(cudaMalloc((void **)&d_expTable, (EXP_TABLE_SIZE + 1) * sizeof(float)));                         // 申请 device 空间
   checkCUDAerr(cudaMemcpy(d_expTable, expTable, (EXP_TABLE_SIZE + 1) * sizeof(float), cudaMemcpyHostToDevice)); // 把host的expTable 转移到 d_expTable 中
 
-  printf("layer1_size: %lld \n",layer1_size);
+  printf("layer1_size: %lld sync_size: %d \n",layer1_size,val_sync_vocab_size);
+
+  // cudaProfilerStart();
   TrainModel();
+  // cudaProfilerStop();
+
+
 
   // memory free
-  free(vocab_codelen);
-  free(vocab_point);
+  // free(vocab_codelen);
+  // free(vocab_point);
   free(vocab_code);
   free(table);
   // free(syn0);
@@ -1901,8 +2033,8 @@ int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*lo
    checkCUDAerr(cudaFreeHost(syn0));
   if(negative > 0 )
     checkCUDAerr(cudaFreeHost(syn1neg));
-  free(vocab);
-  free(vocab_hash);
+  // free(vocab);
+  // free(vocab_hash);
   free(expTable);
   cudaFree(d_expTable);
 

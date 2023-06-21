@@ -3,8 +3,13 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include "spdlog/sinks/basic_file_sink.h"
+#include "spdlog/spdlog.h"
+#include "spdlog/async.h"
 // #include "dsgl.hpp"
 #include "mykernel.cuh"
+#include <thread>
+#include <stdio.h>
 using namespace std;
 
 // extern "C" int cuda_word2vec(int argc, char **argv);
@@ -16,7 +21,21 @@ struct Empty
 // ./bin/simple_walk -g ./karate.data -v 34 -w 34 -o ./out/walks.txt > perf_dist.txt
 int main(int argc, char **argv)
 {
+    Timer sum_timer;
+    // setting of spdlog
+    try 
+    {
+        auto logFactor = spdlog::basic_logger_mt<spdlog::async_factory>("log", "logs/log.txt",true);
+        spdlog::set_default_logger(logFactor);
+    }
+    catch (const spdlog::spdlog_ex &ex)
+    {
+        std::cout << "Log init failed: " << ex.what() << std::endl;
+    }
+    spdlog::set_level(spdlog::level::debug);
+    
     Timer timer;
+
     MPI_Instance mpi_instance(&argc, &argv);
 
     vector<string> corpus;
@@ -33,6 +52,18 @@ int main(int argc, char **argv)
     graph.load_graph(opt.v_num, opt.graph_path.c_str(), opt.partition_path.c_str(), opt.make_undirected);
     graph.vertex_cn.resize(graph.get_vertex_num());
     // graph.load_commonNeighbors(opt.graph_common_neighbour.c_str());
+    //=============================== launch embed thread ==================
+
+    vector<int> degrees(graph.get_vertex_num());
+    for(vertex_id_t i=0; i< graph.v_num;i++)
+    {
+       degrees[i] = graph.vertex_out_degree[i]; 
+    }
+    cout<< "============= [trainer_thread launch]================"<<endl;
+    thread trainer_thread(cuda_word2vec,argc,argv,&degrees,&graph.local_corpus);
+    // cuda_word2vec(argc,argv,&degrees,&graph.local_corpus);
+
+    //======================================================================
 
     auto extension_comp = [&](Walker<uint32_t> &walker, vertex_id_t current_v)
     {
@@ -109,12 +140,29 @@ int main(int argc, char **argv)
     }
 
    
+    if(0 == get_mpi_rank())
+    {
+      printf("[round times] %d\n",graph.round_count);
+      for(int i=0;i<graph.round_length.size();i++)
+      {
+        printf("%zu ",graph.round_length[i]);
+      }
+      printf("\n increment \n");
+      for(int i=1;i<graph.round_length.size();i++)
+      {
+          cout<<graph.round_length[i]-graph.round_length[i-1]<<" ";
+      }
+
+
+    }
     printf("================= EMBEDDING ================\n");
 
    
-    timer.restart();
+    // timer.restart();
+    trainer_thread.join();
     // dsgl(argc, argv,&graph.vertex_cn,&graph.new_sort,&graph);
-    cuda_word2vec(argc,argv,&graph.vertex_cn,&graph.local_corpus);
-    printf("> [%d EMBBEDDING TIME:] %lf \n", get_mpi_rank(),timer.duration());
+    // cuda_word2vec(argc,argv,&graph.vertex_cn,&graph.local_corpus);
+    // printf("> [%d EMBBEDDING TIME:] %lf \n", get_mpi_rank(),timer.duration());
+    printf("> [%d SUM TIME:] %lf \n", get_mpi_rank(),sum_timer.duration());
     return 0;
 }

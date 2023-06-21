@@ -10,7 +10,7 @@ function(add_cuda_exec EXEC_NAME)
     include_directories(/usr/local/cuda-11.6/targets/x86_64-linux/include/)
     link_directories(/usr/local/cuda-11.6/targets/x86_64-linux/lib/)
     cuda_add_executable(${EXEC_NAME} ${EXEC_NAME}.cpp word2vec.cu )
-     target_link_libraries(${EXEC_NAME}  ${MPI_LIBRARIES} )
+     target_link_libraries(${EXEC_NAME}  ${MPI_LIBRARIES}  spdlog::spdlog $<$<BOOL:${MINGW}>:ws2_32>)
     #target_link_libraries(${EXEC_NAME} PUBLIC ${MPI_LIBRARIES} -mkl=sequential)
 endfunction(add_cuda_exec)
 

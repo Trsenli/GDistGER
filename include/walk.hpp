@@ -11,11 +11,15 @@
 #include <unordered_map>
 #include <algorithm>
 #include <queue>
+#include <thread>
+#include "mykernel.cuh"
+#include <mutex>
 
 using namespace std; 
 
 using precision_t = double;
 using frequency_t = int;
+mutex corpus_lock;
 
 // #define minLength 20
 const double R = 0.999;
@@ -394,6 +398,7 @@ class WalkEngine : public GraphEngine<edge_data_t>
     size_t p_step = 0;
     // Timer *timer;
 
+
 public:
     vector<int>vertex_cn;
     vector<int>local_corpus;
@@ -401,6 +406,10 @@ public:
     vertex_id_t minLength = 20;
     vertex_id_t init_round = 5;
     double msg_produce_time = 0.0;
+
+    int round_count = 0;
+    vector<size_t> round_length={0};
+    size_t last_corpus_size = 0;
     
     void get_new_sort()
     {
@@ -452,6 +461,7 @@ public:
     WalkEngine()
     {
         // timer = new Timer();
+        this->local_corpus.resize(this->v_num*10000);
         randgen = new StdRandNumGenerator[this->worker_num];
     }
 
@@ -608,7 +618,7 @@ public:
         typedef Walker<walker_data_t> walker_t;
         typedef Message<walker_t> walker_msg_t;
 
-        walker_id_t walker_num = walker_config->walker_num * init_round;
+        walker_id_t walker_num = walker_config->walker_num * init_round; // walker num equals with vertex num  
         // walker_id_t walker_per_iter = walker_num * walk_config->rate;
         walker_id_t walker_per_iter = walker_num;
         if (walker_per_iter == 0) walker_per_iter = 1;
@@ -677,7 +687,16 @@ public:
                     // std::string local_output_path = walk_config->output_path_prefix + "." + std::to_string(this->local_partition_id);
                     std::string local_output_path = walk_config->output_path_prefix;
                     Timer timer_dump;
+                    corpus_lock.lock();
                     paths->dump(local_output_path.c_str(), iter == 0 ? "w": "a", walk_config->print_with_head_info, context_map_freq,this->local_corpus,this->vertex_cn,this->co_occor);
+                    corpus_lock.unlock();
+                    //tally the increment of local_corpus 
+                    this->round_length.push_back(this-> local_corpus.size());
+                    this->round_count++;
+                    size_t start_id = this->round_length[round_count-1];
+                    size_t end_id = this->round_length[round_count];
+                    trainer_caller(start_id,end_id);
+
                     this->other_time += timer_dump.duration();
                     
                     MPI_Allreduce(context_map_freq.data(),  this->vertex_freq, this->v_num, get_mpi_data_type<vertex_id_t>(), MPI_SUM, MPI_COMM_WORLD);
@@ -760,6 +779,7 @@ public:
 
         this->dealloc_array(walk_data.local_walkers, walker_array_size);
         this->dealloc_array(walk_data.local_walkers_bak, walker_array_size);
+        trainer_caller(1,0);// c_start > c_end stand for "OFF"
     }
 
     void internal_random_walk_wrap (WalkerConfig<edge_data_t, walker_data_t> *walker_config, TransitionConfig<edge_data_t, walker_data_t> *transition_config, WalkConfig *walk_config)
@@ -809,8 +829,8 @@ public:
             auto msg_producer = [&] (void) {
                 Timer msg_producer_timer;
                 walker_id_t progress = 0;
-                walker_id_t data_amount = local_walker_num;
                 auto *data_begin = local_walkers;
+                walker_id_t data_amount = local_walker_num;
                 const walker_id_t work_step_length = PARALLEL_CHUNK_SIZE;
 
                 #pragma omp parallel if (use_parallel)

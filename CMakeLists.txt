@@ -9,7 +9,10 @@ set(DGER_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 option(WITH_TESTS "Build unit test programs" OFF)
 
 include(distger.cmake)
-
+if(NOT TARGET spdlog)
+    # Stand-alone build
+    find_package(spdlog REQUIRED)
+endif()
 
 find_package(OpenMP REQUIRED)
 if(OPENMP_FOUND)

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <utility>
 
 #include <mpi.h>
 #include <omp.h>
@@ -133,7 +134,14 @@ struct TrainTask
 {
   size_t start_idx;
   size_t end_idx;
+  vector<int> task_corpus;
   TrainTask(size_t si, size_t ei) : start_idx(si), end_idx(ei){};
+  TrainTask(vector<int> &tmp)
+  {
+    task_corpus = std::move(tmp);
+    start_idx = 0;
+    end_idx = tmp.size();
+  };
 };
 queue<TrainTask> train_queue;
 // @brief: modifiy the state of trainer. And create the training task.
@@ -146,6 +154,12 @@ void trainer_caller(size_t c_start, size_t c_end)
   queue_lock.lock();
   train_queue.push(TrainTask(c_start, c_end));
   queue_lock.unlock();
+}
+void add_corps2queue(vector<int> &tmp)
+{
+  spdlog::debug("add corpus to queue.Size {0}", tmp.size());
+  lock_guard<mutex> lg(queue_lock);
+  train_queue.push(TrainTask(tmp));
 }
 __device__ float reduceInWarp(float f)
 {
@@ -1751,6 +1765,7 @@ void TrainModelThread()
 
       // running until state is set to "OFF".
       int task_counter = 1;
+      vector<int> corpus_segment;
       while (1)
       {
         if (trainer_state == TRAIN_OFF) // stop to train
@@ -1767,7 +1782,8 @@ void TrainModelThread()
           else
           {
             queue_lock.lock();
-            TrainTask task = train_queue.front();
+            TrainTask &task = train_queue.front();
+            corpus_segment = move(task.task_corpus);
             train_queue.pop();
             queue_lock.unlock();
             corpus_start = task.start_idx;
@@ -1839,9 +1855,8 @@ void TrainModelThread()
                               corpus_end);
                 break;
               }
-              corpus_lock.lock();
-              int origin_word = (*cu_local_corpus)[corpus_idx];
-              corpus_lock.unlock();
+              // int origin_word = (*cu_local_corpus)[corpus_idx];
+              int origin_word = corpus_segment[corpus_idx];
               corpus_idx++;
               if (origin_word == -1)
                 break;

@@ -687,15 +687,15 @@ public:
                     // std::string local_output_path = walk_config->output_path_prefix + "." + std::to_string(this->local_partition_id);
                     std::string local_output_path = walk_config->output_path_prefix;
                     Timer timer_dump;
-                    corpus_lock.lock();
-                    paths->dump(local_output_path.c_str(), iter == 0 ? "w": "a", walk_config->print_with_head_info, context_map_freq,this->local_corpus,this->vertex_cn,this->co_occor);
-                    corpus_lock.unlock();
+                    vector<int> tmp_corpus;
+                    paths->dump(local_output_path.c_str(), iter == 0 ? "w" : "a", walk_config->print_with_head_info, context_map_freq, tmp_corpus, this->vertex_cn, this->co_occor);
                     //tally the increment of local_corpus 
                     this->round_length.push_back(this-> local_corpus.size());
                     this->round_count++;
                     size_t start_id = this->round_length[round_count-1];
                     size_t end_id = this->round_length[round_count];
-                    trainer_caller(start_id,end_id);
+                    // trainer_caller(start_id,end_id);
+                    add_corps2queue(tmp_corpus);
 
                     this->other_time += timer_dump.duration();
                     

@@ -42,10 +42,10 @@ elif [ $1 = "soc" ]; then
 	$nvprof $bin -g $graph -v 1632803 -w 1632803 --min_L 20 --min_R 1 $other_option
 elif [ $1 = "LJ" ]; then
 	# mpiexec -n $node_num $bin -g $graph -v 2238731 -w 2238731 --min_L 20 --min_R 5 $other_option
-	$nvprof $bin -g $graph -v 2238731 -w 2238731 --min_L 20 --min_R 5 $other_option
+	$nvprof $bin -g $graph -v 2238731 -w 2238731 --min_L 20 --min_R 1 $other_option
 elif [ $1 = "com" ]; then
 	# mpiexec -n $node_num $bin -g $graph -v 3072441  -w 3072441  --min_L 20 --min_R 5 $other_option
-	$nvprof $bin -g $graph -v 3072441 -w 3072441 --min_L 20 --min_R 5 $other_option
+	$nvprof $bin -g $graph -v 3072441 -w 3072441 --min_L 20 --min_R 1 $other_option
 elif [ $1 = "twt" ]; then
 	mpiexec -n $node_num $bin -g $graph -v 41652230 -w 41652230 --min_L 20 --min_R 5 $other_option
 fi

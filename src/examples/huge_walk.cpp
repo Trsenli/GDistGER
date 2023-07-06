@@ -33,7 +33,8 @@ int main(int argc, char **argv)
         std::cout << "Log init failed: " << ex.what() << std::endl;
     }
     spdlog::set_level(spdlog::level::debug);
-    
+    spdlog::info("Log Test");
+
     Timer timer;
 
     MPI_Instance mpi_instance(&argc, &argv);
@@ -51,6 +52,7 @@ int main(int argc, char **argv)
     printf("init_round = %d, min_length = %d\n", graph.init_round, graph.minLength);
     graph.load_graph(opt.v_num, opt.graph_path.c_str(), opt.partition_path.c_str(), opt.make_undirected);
     graph.vertex_cn.resize(graph.get_vertex_num());
+    spdlog::debug("load graph done");
     // graph.load_commonNeighbors(opt.graph_common_neighbour.c_str());
     //=============================== launch embed thread ==================
 
@@ -61,6 +63,7 @@ int main(int argc, char **argv)
     }
     cout<< "============= [trainer_thread launch]================"<<endl;
     thread trainer_thread(cuda_word2vec,argc,argv,&degrees,&graph.local_corpus);
+    spdlog::info("trainer thread launches");
     // cuda_word2vec(argc,argv,&degrees,&graph.local_corpus);
 
     //======================================================================

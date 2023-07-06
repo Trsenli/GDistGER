@@ -1,0 +1,1 @@
+python3 LP_embedding4AUC.py --emb /home/rocman/graph_work/graph_embedding/mountdir/lzl/test/6.1Huge/build/out/ytb_emb.txt --test_edges /home/rocman/graph_work/graph_embedding/mountdir/lzl/test/6.1Huge/dataset/ytb/ytb.edge  --test_labels /home/rocman/graph_work/graph_embedding/mountdir/lzl/test/6.1Huge/dataset/ytb/ytb.label 

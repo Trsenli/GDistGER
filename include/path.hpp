@@ -68,7 +68,7 @@ struct PathSet
     {
         Timer timer;
         // FILE* f = fopen(output_path, fopen_mode);
-        assert(f != NULL);
+        // assert(f != NULL);
         
         size_t null_sen = 0;
         for (int worker_idx = 0; worker_idx < seg_num; worker_idx++)
@@ -87,7 +87,7 @@ struct PathSet
                 if(path_length[worker_idx][walker_idx]==0)null_sen++;
                 for (step_t p_i = 0; p_i < path_length[worker_idx][walker_idx]; p_i++)
                 {
-
+                    // 统计在corpus中的词频。
                     vec[*(path_begin[worker_idx][walker_idx] + p_i)]++;
                     // fprintf(f, " %u", *(path_begin[worker_idx][walker_idx] + p_i));
                     // tmp_path.push_back(*(path_begin[worker_idx][walker_idx] + p_i));

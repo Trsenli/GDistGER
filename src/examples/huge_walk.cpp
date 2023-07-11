@@ -14,6 +14,7 @@ using namespace std;
 
 // extern "C" int cuda_word2vec(int argc, char **argv);
 extern "C" int cuda_word2vec (int argc, char **argv, vector<int>* vertex_cn, vector<int>*local_corpus);
+std::shared_ptr<spdlog::logger> logFactor;
 struct Empty
 {
 };
@@ -25,7 +26,7 @@ int main(int argc, char **argv)
     // setting of spdlog
     try 
     {
-        auto logFactor = spdlog::basic_logger_mt<spdlog::async_factory>("log", "logs/log.txt",true);
+        logFactor = spdlog::basic_logger_mt<spdlog::async_factory>("log", "logs/log.txt",true);
         spdlog::set_default_logger(logFactor);
     }
     catch (const spdlog::spdlog_ex &ex)

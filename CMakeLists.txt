@@ -43,8 +43,8 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MPI_CXX_LINK_FLAGS}")
 # endif()
 
 #use c++11
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -std=c++0x -O3 -D USE_MKL -fPIE")
+set(CMAKE_CXX_STANDARD 11) # set c++ standard  c++11
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -O3 -D USE_MKL -fPIE")
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -std=c++0x ")
 message("${CMAKE_CXX_FLAGS}")
 

@@ -14,6 +14,9 @@
 #include <thread>
 #include "mykernel.cuh"
 #include <mutex>
+#include "spdlog/sinks/basic_file_sink.h"
+#include "spdlog/spdlog.h"
+#include "spdlog/async.h"
 
 using namespace std; 
 
@@ -21,6 +24,7 @@ using precision_t = double;
 using frequency_t = int;
 mutex corpus_lock;
 
+extern std::shared_ptr<spdlog::logger> logFactor;
 // #define minLength 20
 const double R = 0.999;
 //#define init_round 5
@@ -397,7 +401,7 @@ class WalkEngine : public GraphEngine<edge_data_t>
     size_t trace_num = 0;
     size_t p_step = 0;
     // Timer *timer;
-
+    bool half_flag = true;
 
 public:
     vector<int>vertex_cn;
@@ -461,8 +465,9 @@ public:
     WalkEngine()
     {
         // timer = new Timer();
-        this->local_corpus.resize(this->v_num*10000);
+        this->local_corpus.resize(this->v_num);
         randgen = new StdRandNumGenerator[this->worker_num];
+        spdlog::set_default_logger(logFactor);
     }
 
     ~WalkEngine()
@@ -618,15 +623,15 @@ public:
         typedef Walker<walker_data_t> walker_t;
         typedef Message<walker_t> walker_msg_t;
 
-        walker_id_t walker_num = walker_config->walker_num * init_round; // walker num equals with vertex num  
+        walker_id_t walker_num = walker_config->walker_num * init_round/2; // walker num equals with vertex num  
         // walker_id_t walker_per_iter = walker_num * walk_config->rate;
-        walker_id_t walker_per_iter = walker_num;
+        walker_id_t walker_per_iter = walker_num;//. In each iteration, walker_num = vertex num
         if (walker_per_iter == 0) walker_per_iter = 1;
         if (walker_per_iter > walker_num) walker_per_iter = walker_num;
-        size_t walker_array_size = walker_per_iter;
-        walker_id_t remained_walker = walker_num;
+        size_t walker_array_size = walker_per_iter;// area which places walekr message
+        walker_id_t remained_walker = walker_num;  
 
-        InternalWalkData<query_data_t, response_data_t> walk_data;
+        InternalWalkData<query_data_t, response_data_t> walk_data;// walker manager 
 
         walk_data.collect_path_flag = false;
         walk_data.pc = nullptr;
@@ -637,8 +642,21 @@ public:
         if (walker_config->walker_init_dist_func == nullptr)
         {
             walker_config->walker_init_dist_func = this->get_equal_dist_func();
+            auto get_half_equal_dist_func = [&] (walker_id_t w_id)
+            {
+                vertex_id_t start_v ;
+                if(this->half_flag){
+                    start_v = w_id % (this->v_num/2);
+                    this->half_flag != this-> half_flag;
+                }else{
+                    start_v = this->v_num/2 + w_id % (this->v_num/2) ;
+                    this->half_flag != this-> half_flag;
+                }
+                return start_v;
+            };
+            walker_config->walker_init_dist_func = get_half_equal_dist_func;
         }
-        walk_data.local_walkers = this->template alloc_array<Message<Walker<walker_data_t> > >(walker_array_size);
+        walk_data.local_walkers = this->template alloc_array<Message<Walker<walker_data_t> > >(walker_array_size);// walker in memory space
         walk_data.local_walkers_bak = this->template alloc_array<Message<Walker<walker_data_t> > >(walker_array_size);
 
         size_t max_msg_size = 0;
@@ -646,7 +664,7 @@ public:
         {
             max_msg_size = sizeof(walker_msg_t);
         }
-        this->set_msg_buffer(walker_array_size, max_msg_size);
+        this->set_msg_buffer(walker_array_size, max_msg_size); // ? 
 
         int iter = 0;
         std::vector<vertex_id_t> context_map_freq(this->v_num, 0);
@@ -654,16 +672,18 @@ public:
         bool terminal_flag = false;
         while (remained_walker != 0)
         {
+            Timer walk_iter_timer;
             if (walk_data.collect_path_flag)
             {
                 walk_data.pc = new PathCollector(this->worker_num);
             }
             walker_id_t walker_begin = walker_num - remained_walker;
-            walk_data.active_walker_num = std::min(remained_walker, walker_per_iter);
+            walk_data.active_walker_num = std::min(remained_walker, walker_per_iter);// 激活的Walker数。 这里应该是全激活了
             remained_walker -= walk_data.active_walker_num;
             std::cout << "walk_data.active_walker_num = " << walk_data.active_walker_num << std::endl;
 
-            walk_data.local_walker_num = init_walkers(walk_data.local_walkers, walk_data.local_walkers_bak, walker_begin, walker_begin + walk_data.active_walker_num, walker_config->walker_init_dist_func, walker_config->walker_init_state_func);
+            // walker_init_dist_func : w_id % this->v_num;
+            walk_data.local_walker_num = init_walkers(walk_data.local_walkers, walk_data.local_walkers_bak, walker_begin, walker_begin + walk_data.active_walker_num, walker_config->walker_init_dist_func, walker_config->walker_init_state_func);// 初始化激活的Walker，计算它们初始的位置，也就是分配Walker到各个节点，并且返回本地节点的walker数量
 
             if (walk_data.collect_path_flag)
             {
@@ -671,7 +691,7 @@ public:
 #pragma omp parallel for
                 for (walker_id_t w_i = 0; w_i < walk_data.local_walker_num; w_i++)
                 {
-                    walk_data.pc->add_footprint(Footprint(walk_data.local_walkers[w_i].data.id, walk_data.local_walkers[w_i].dst_vertex_id, 0), omp_get_thread_num());
+                    walk_data.pc->add_footprint(Footprint(walk_data.local_walkers[w_i].data.id, walk_data.local_walkers[w_i].dst_vertex_id, 0), omp_get_thread_num());// 把walker开始的第一个点放进去
                 }
             }
             internal_walk_epoch(&walk_data, walker_config, transition_config);
@@ -700,6 +720,10 @@ public:
                     this->other_time += timer_dump.duration();
                     
                     MPI_Allreduce(context_map_freq.data(),  this->vertex_freq, this->v_num, get_mpi_data_type<vertex_id_t>(), MPI_SUM, MPI_COMM_WORLD);
+                    for(size_t i = 0; i< this->v_num;i++)
+                    {
+                        if(this->vertex_freq[i] == 0)this->vertex_freq[i] = 1;
+                    }
                     uint64_t words_sum = 0;
                     uint64_t degree_sum = 0;
                     for(int i = 0; i < this->v_num; i++)
@@ -712,6 +736,9 @@ public:
                         assert(degree_sum < UINT64_MAX);
                     }
                     std::cout << "words_sum = " << words_sum << " degree_sum = " << degree_sum << std::endl;
+                    // degree_sum 所有顶点的度数和，其实是不会变的。
+                    // words_sum 游走到现在的累计词频。
+                    // 计算熵需要每个顶点的
                     double h = 0.0;
                     for(int i = 0; i < this->v_num; i++)
                     {
@@ -719,12 +746,12 @@ public:
                             std::cout << "this->vertex_out_degree[ " << i << " ] = " << this->vertex_out_degree[i] << std::endl;
                         }
                         assert(this->vertex_out_degree[i] >= 0);
-                        double pi = static_cast<double>(this->vertex_out_degree[i]) / degree_sum;
+                        double pi = static_cast<double>(this->vertex_out_degree[i]) / degree_sum;// 顶点的度数占比
                         if(pi <= 0 || pi >= 1){
                             std::cout << "pi = " << pi << std::endl;
                         }
                         assert(pi > 0 && pi <1);
-                        double qi =  static_cast<double>(this->vertex_freq[i]) / words_sum;
+                        double qi =  static_cast<double>(this->vertex_freq[i]) / words_sum;// 顶点在corpus的词频占比
                         if(qi == 0){std::cout << "this->vertex_freq[ " << i << " ] = " << this->vertex_freq[i] <<" degree: "<<this->vertex_out_degree[i]<< std::endl;}
                         if(qi <= 0 || qi >= 1){
                             std::cout << "qi = " << qi << std::endl;
@@ -751,6 +778,7 @@ public:
                         if(this->local_partition_id == 0)
                         {
                             std::cout << "***********************************************Round " << iter <<" ************************************************" << std::endl;
+                            spdlog::info("iter {0} time {1:.3f}",iter,walk_iter_timer.duration()); 
                         }
                     }
                 }
@@ -771,7 +799,7 @@ public:
                     // this->free_msg_buffer();
                     // this->set_msg_buffer(walker_array_size, max_msg_size);
                     walker_num = walker_config->walker_num;
-                    remained_walker = walker_num;
+                    remained_walker = walker_num; // [重新把 remained_walker 设置成 全部walker的值，达到重复执行的效果]
                 }
                 delete walk_data.pc;
             }
@@ -814,7 +842,7 @@ public:
         auto active_walker_num = walk_data->active_walker_num;    
         int super_step = 0;
 
-        std::vector<std::unordered_map<vertex_id_t, int>> walker_to_path(active_walker_num, std::unordered_map<vertex_id_t, int>());
+        std::vector<std::unordered_map<vertex_id_t, int>> walker_to_path(this->v_num, std::unordered_map<vertex_id_t, int>());
         
         while (active_walker_num != 0)
         {
